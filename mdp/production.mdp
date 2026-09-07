@@ -1,0 +1,37 @@
+title                   = Production MD
+
+integrator              = md
+dt                      = 0.002
+nsteps                  = 2500000     ; 5 ns
+
+continuation            = yes
+constraint_algorithm    = lincs
+constraints             = h-bonds
+
+cutoff-scheme           = Verlet
+nstlist                 = 20
+
+coulombtype             = PME
+rcoulomb                = 1.2
+
+vdwtype                 = cutoff
+rvdw                    = 1.2
+
+tcoupl                  = V-rescale
+tc-grps                 = Protein Non-Protein
+tau_t                   = 0.1 0.1
+ref_t                   = 310 310
+
+pcoupl                  = C-rescale
+pcoupltype              = isotropic
+tau_p                   = 5.0
+ref_p                   = 1.0
+compressibility         = 4.5e-5
+
+gen_vel                 = no
+pbc                     = xyz
+
+nstxout-compressed      = 5000
+compressed-x-precision  = 1000
+nstenergy               = 5000
+nstlog                  = 5000

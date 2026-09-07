@@ -1,7 +1,7 @@
 # AbMD
 
 AbMD is a reproducible workflow for all-atom molecular dynamics simulations of therapeutic antibodies, with the longer-term goal of extracting structural and dynamic features for biologics developability prediction using graph neural networks.
-
+![Antibody Simulation Platform dashboard](docs/dashboard.png)
 ## Project goals
 
 The project aims to build a clean, reproducible, and scalable workflow for:

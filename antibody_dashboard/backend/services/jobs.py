@@ -26,6 +26,7 @@ def create_job(
     elastic_upper: float | None = None,
     salt_concentration: float = 0.15,
     temperature: float = 310.0,
+    nt=8,
 ) -> dict:
 
     job_id = str(uuid.uuid4())
@@ -71,7 +72,7 @@ def create_job(
         "elastic_upper": elastic_upper,
         "salt_concentration": salt_concentration,
         "temperature": temperature,
-        "nt": 6,
+        "nt": nt,
     }
 
     write_json(
@@ -117,10 +118,8 @@ def launch_job(job_id: str) -> None:
                 run_aa_pipeline(directory)
 
             elif method == "martini":
-                raise RuntimeError(
-                    "Martini pipeline is not connected yet."
-                )
-
+                from backend.pipelines.martini_pipeline import run_martini_pipeline
+                run_martini_pipeline(directory)
             else:
                 raise RuntimeError(
                     f"Unknown simulation method: {method}"
@@ -235,7 +234,7 @@ def list_jobs(limit: int = 20) -> list[dict]:
     return jobs
 
 def stop_job(job_id: str) -> bool:
-    """Request a running simulation to stop and terminate its current process."""
+    """Stop the currently running simulation."""
 
     directory = job_dir(job_id)
 
@@ -245,29 +244,53 @@ def stop_job(job_id: str) -> bool:
     pid_file = directory / "current_process.json"
     stop_file = directory / "stop.requested"
 
-    # Tell the worker that termination is intentional.
-    stop_file.write_text("stop requested\n", encoding="utf-8")
+    # Record that the stop was explicitly requested by the user.
+    stop_file.write_text(
+        "stop requested\n",
+        encoding="utf-8",
+    )
 
     write_json(
         directory / "status.json",
         {"status": "stopping"},
     )
 
-    if not pid_file.exists():
-        return True
+    if pid_file.exists():
+        try:
+            data = read_json(pid_file)
+            pid = int(data["pid"])
 
-    try:
-        data = read_json(pid_file)
-        pid = int(data["pid"])
+            # Terminate the complete GROMACS process group.
+            os.killpg(pid, signal.SIGTERM)
 
-        # Gracefully terminate the whole GROMACS process group.
-        os.killpg(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
 
-    except ProcessLookupError:
-        pass
+        except Exception as exc:
+            with open(
+                directory / "log.txt",
+                "a",
+                encoding="utf-8",
+            ) as f:
+                f.write(
+                    f"\nCould not terminate process cleanly: {exc}\n"
+                )
 
-    except Exception:
-        return False
+            return False
+
+    # The stop request has been issued successfully.
+    # Mark it stopped rather than leaving the UI indefinitely at STOPPING.
+    write_json(
+        directory / "status.json",
+        {"status": "stopped"},
+    )
+
+    with open(
+        directory / "log.txt",
+        "a",
+        encoding="utf-8",
+    ) as f:
+        f.write("\nSimulation stopped by user.\n")
 
     return True
 

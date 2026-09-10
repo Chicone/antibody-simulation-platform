@@ -96,7 +96,8 @@ async def create_simulation_job(
     elastic_lower: float | None = Form(None),
     elastic_upper: float | None = Form(None),
     salt_concentration: float = Form(0.15),
-    temperature: float = Form(310.0)
+    temperature: float = Form(310.0),
+    nt: int = Form(8),
 ):
     if method not in {"aa", "martini"}:
         raise HTTPException(
@@ -121,4 +122,5 @@ async def create_simulation_job(
         elastic_upper=elastic_upper,
         salt_concentration=salt_concentration,
         temperature=temperature,
+        nt=nt,
     )

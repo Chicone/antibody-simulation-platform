@@ -1,0 +1,42 @@
+; MARTINI 3 — NPT equilibration for soluble Fab
+
+integrator              = md
+dt                      = 0.002
+nsteps                  = 250000     ; 500 ps
+
+gen_vel                 = no
+
+; Temperature coupling
+tcoupl                  = v-rescale
+tc-grps                 = Protein Solvent
+tau-t                    = 1.0 1.0
+ref-t                    = 310 310
+
+; Pressure coupling
+pcoupl                   = c-rescale
+pcoupltype               = isotropic
+tau-p                    = 12.0
+ref-p                    = 1.0
+compressibility          = 3e-4
+
+; Martini 3 nonbonded settings
+cutoff-scheme            = Verlet
+nstlist                  = 20
+rlist                    = 1.1
+vdw-type                 = cutoff
+rvdw                     = 1.1
+coulombtype              = reaction-field
+rcoulomb                 = 1.1
+epsilon_rf               = 15
+
+pbc                      = xyz
+constraints              = none
+comm-mode                = Linear
+
+; Output
+nstxout                  = 0
+nstvout                  = 0
+nstfout                  = 0
+nstenergy                = 1000
+nstlog                   = 1000
+nstxout-compressed       = 1000

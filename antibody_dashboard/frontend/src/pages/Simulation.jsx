@@ -18,6 +18,7 @@ export default function Simulation() {
   const logOffsetRef = useRef(0);
   const logBoxRef = useRef(null);
   const liveOutputSectionRef = useRef(null);
+  const logSelectionRef = useRef(false);
   const [mode, setMode] = useState("aa");
 
   const [jobs, setJobs] = useState([]);
@@ -110,16 +111,16 @@ export default function Simulation() {
             logOffsetRef.current
         );
 
-        if (!cancelled && chunk) {
+        if (!cancelled && chunk && !logSelectionRef.current) {
           setLiveLog((previous) => {
             const updated = previous + chunk;
-
-            // Limit memory use during very long MD runs.
             return updated.slice(-100000);
           });
         }
 
-        logOffsetRef.current = newOffset;
+        if (!logSelectionRef.current) {
+          logOffsetRef.current = newOffset;
+        }
       } catch (error) {
         console.error(
           "Could not read simulation log:",
@@ -158,7 +159,49 @@ export default function Simulation() {
     });
   }, [liveLog]);
 
+  // Resume live updates when the user clears the text selection.
+  useEffect(() => {
+    function handleSelectionChange() {
+      const selection = window.getSelection()?.toString();
 
+      if (!selection) {
+        logSelectionRef.current = false;
+      }
+    }
+
+    document.addEventListener(
+      "selectionchange",
+      handleSelectionChange
+    );
+
+    return () => {
+      document.removeEventListener(
+        "selectionchange",
+        handleSelectionChange
+      );
+    };
+  }, []);
+
+  // Resume live output only when the user clicks outside the terminal.
+  useEffect(() => {
+    function handleMouseDown(event) {
+      if (
+        logBoxRef.current &&
+        !logBoxRef.current.contains(event.target)
+      ) {
+        logSelectionRef.current = false;
+      }
+    }
+
+    document.addEventListener("mousedown", handleMouseDown);
+
+    return () => {
+      document.removeEventListener(
+        "mousedown",
+        handleMouseDown
+      );
+    };
+  }, []);
 
   const [aaDuration, setAaDuration] = useState(50);
   const [martiniDuration, setMartiniDuration] = useState(500);
@@ -173,6 +216,7 @@ export default function Simulation() {
 
   const [saltConcentration, setSaltConcentration] = useState("0.15");
   const [temperature, setTemperature] = useState("310");
+  const [cpuThreads, setCpuThreads] = useState(8);
 
   async function createAAJob() {
     if (!proteinFile) {
@@ -193,6 +237,7 @@ export default function Simulation() {
     // Send a real numeric value to FastAPI.
     form.append("salt_concentration", String(parseFloat(saltConcentration)));
     form.append("temperature", String(parseFloat(temperature)));
+    form.append("nt", String(cpuThreads));
 
     const response = await fetch(
       "http://127.0.0.1:8010/api/jobs",
@@ -210,6 +255,64 @@ export default function Simulation() {
     const data = await response.json();
 
     // Automatically select the new run so the live terminal follows it.
+    if (data?.job_id) {
+      setSelectedJobId(data.job_id);
+    }
+
+    return data;
+  }
+
+  // Create and launch a Martini simulation job.
+  async function createMartiniJob() {
+    if (!proteinFile) {
+      alert("Please select an antibody PDB first.");
+      return;
+    }
+
+    const form = new FormData();
+
+    form.append("protein_pdb", proteinFile);
+    form.append("method", "martini");
+    form.append("duration_ns", martiniDuration);
+
+    form.append(
+      "name",
+      proteinFile.name.replace(/\.[^/.]+$/, "")
+    );
+
+    form.append("model", martiniModel);
+    form.append("elastic_force", elasticForce);
+    form.append("elastic_lower", elasticLower);
+    form.append("elastic_upper", elasticUpper);
+
+    form.append(
+      "salt_concentration",
+      String(parseFloat(saltConcentration))
+    );
+
+    form.append(
+      "temperature",
+      String(parseFloat(temperature))
+    );
+
+    form.append("nt", String(cpuThreads));
+
+    const response = await fetch(
+      "http://127.0.0.1:8010/api/jobs",
+      {
+        method: "POST",
+        body: form,
+      }
+    );
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text);
+    }
+
+    const data = await response.json();
+
+    // Automatically follow the newly created Martini run.
     if (data?.job_id) {
       setSelectedJobId(data.job_id);
     }
@@ -431,24 +534,37 @@ export default function Simulation() {
               setSaltConcentration={setSaltConcentration}
               temperature={temperature}
               setTemperature={setTemperature}
+              cpuThreads={cpuThreads}
+              setCpuThreads={setCpuThreads}
               onStop={() => stopJob(selectedJobId)}
               selectedJobStatus={
                 jobs.find((job) => job.job_id === selectedJobId)?.status
               }
             />
           ) : (
-            <MartiniPanel
-              duration={martiniDuration}
-              setDuration={setMartiniDuration}
-              model={martiniModel}
-              setModel={setMartiniModel}
-              elasticForce={elasticForce}
-              setElasticForce={setElasticForce}
-              elasticLower={elasticLower}
-              setElasticLower={setElasticLower}
-              elasticUpper={elasticUpper}
-              setElasticUpper={setElasticUpper}
-            />
+          <MartiniPanel
+            duration={martiniDuration}
+            setDuration={setMartiniDuration}
+            model={martiniModel}
+            setModel={setMartiniModel}
+            elasticForce={elasticForce}
+            setElasticForce={setElasticForce}
+            elasticLower={elasticLower}
+            setElasticLower={setElasticLower}
+            elasticUpper={elasticUpper}
+            setElasticUpper={setElasticUpper}
+            proteinFile={proteinFile}
+            setProteinFile={setProteinFile}
+            temperature={temperature}
+            setTemperature={setTemperature}
+            cpuThreads={cpuThreads}
+            setCpuThreads={setCpuThreads}
+            onRun={createMartiniJob}
+            onStop={() => stopJob(selectedJobId)}
+            selectedJobStatus={
+              jobs.find((job) => job.job_id === selectedJobId)?.status
+            }
+          />
           )}
 
         </Box>
@@ -477,6 +593,10 @@ export default function Simulation() {
       <Box
         ref={logBoxRef}
         component="pre"
+        onMouseDown={() => {
+          // Freeze terminal updates while the user inspects/copies text.
+          logSelectionRef.current = true;
+        }}
         sx={{
           m: 0,
           p: 2,
@@ -746,6 +866,8 @@ function AllAtomPanel({
   setSaltConcentration,
   temperature,
   setTemperature,
+  cpuThreads,
+  setCpuThreads,
   onStop,
   selectedJobStatus,
 }) {
@@ -827,6 +949,20 @@ function AllAtomPanel({
             inputProps={{
               inputMode: "decimal",
             }}
+          />
+
+          <TextField
+            label="CPU threads"
+            type="number"
+            value={cpuThreads}
+            onChange={(e) =>
+              setCpuThreads(
+                Math.max(1, Math.floor(Number(e.target.value) || 1))
+              )
+            }
+            size="small"
+            sx={{ width: 150 }}
+            inputProps={{ min: 1, step: 1 }}
           />
         </Stack>
       </Box>
@@ -942,6 +1078,15 @@ function MartiniPanel({
   setElasticLower,
   elasticUpper,
   setElasticUpper,
+  proteinFile,
+  setProteinFile,
+  temperature,
+  setTemperature,
+  cpuThreads,
+  setCpuThreads,
+  onRun,
+  onStop,
+  selectedJobStatus,
 }) {
   return (
     <Stack spacing={3}>
@@ -1089,19 +1234,52 @@ function MartiniPanel({
             size="small"
             sx={{ width: 170 }}
           />
+
+          <TextField
+            label="CPU threads"
+            type="number"
+            value={cpuThreads}
+            onChange={(e) =>
+              setCpuThreads(
+                Math.max(1, Math.floor(Number(e.target.value) || 1))
+              )
+            }
+            size="small"
+            sx={{ width: 150 }}
+            inputProps={{ min: 1, step: 1 }}
+          />
         </Stack>
       </Box>
 
-      <Button
-        variant="contained"
-        color="secondary"
-        sx={{
-          alignSelf: "flex-start",
-          minWidth: 180,
-        }}
+      <Stack
+        direction={{ xs: "column", sm: "row" }}
+        spacing={2}
+        alignItems={{ sm: "center" }}
       >
-        Build + Run Martini
-      </Button>
+        <Button
+          variant="contained"
+          color="secondary"
+          onClick={onRun}
+          disabled={!proteinFile}
+          sx={{
+            minWidth: 180,
+          }}
+        >
+          Build + Run Martini
+        </Button>
+
+        <Button
+          variant="outlined"
+          color="error"
+          onClick={onStop}
+          disabled={
+            selectedJobStatus !== "running" &&
+            selectedJobStatus !== "queued"
+          }
+        >
+          Stop
+        </Button>
+      </Stack>
     </Stack>
   );
 }

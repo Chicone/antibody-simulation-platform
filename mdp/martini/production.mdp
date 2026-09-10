@@ -1,0 +1,38 @@
+; MARTINI 3 — production for soluble Fab
+
+integrator              = md
+dt                      = 0.01
+nsteps                  = 100000     ; placeholder: 1 ns
+
+gen_vel                 = no
+
+tcoupl                  = v-rescale
+tc-grps                 = Protein Solvent
+tau-t                   = 1.0 1.0
+ref-t                   = 310 310
+
+pcoupl                  = c-rescale
+pcoupltype               = isotropic
+tau-p                    = 12.0
+ref-p                    = 1.0
+compressibility          = 3e-4
+
+cutoff-scheme            = Verlet
+nstlist                  = 20
+rlist                    = 1.1
+vdw-type                 = cutoff
+rvdw                     = 1.1
+coulombtype              = reaction-field
+rcoulomb                 = 1.1
+epsilon_rf               = 15
+
+pbc                      = xyz
+constraints              = none
+comm-mode                = Linear
+
+nstxout                  = 0
+nstvout                  = 0
+nstfout                  = 0
+nstenergy                = 5000
+nstlog                   = 5000
+nstxout-compressed       = 5000

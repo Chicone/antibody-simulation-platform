@@ -526,4 +526,3 @@ def run_aa_pipeline(job_dir: Path) -> None:
 
     return
 
-    return

@@ -66,4 +66,4 @@ runs/
 *.pka
 
 # GROMACS-generated preprocessing output
-mdout.mdp
+mdout.mdpantibody_dashboard/data/

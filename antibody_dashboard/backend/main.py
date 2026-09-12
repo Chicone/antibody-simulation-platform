@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.routers.jobs import router as jobs_router
-
+from backend.routers import calibration
 
 app = FastAPI(
     title="Antibody Simulation Platform",
@@ -25,6 +25,8 @@ app.add_middleware(
 
 
 app.include_router(jobs_router)
+
+app.include_router(calibration.router)
 
 
 @app.get("/api/health")

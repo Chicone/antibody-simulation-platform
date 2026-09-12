@@ -13,9 +13,13 @@ import {
   Typography,
 } from "@mui/material";
 
+const API_BASE =
+  import.meta.env.VITE_API_BASE || "http://127.0.0.1:8010";
+
 export default function Simulation() {
 
   const logOffsetRef = useRef(0);
+  const calibrationLogOffsetRef = useRef(0);
   const logBoxRef = useRef(null);
   const liveOutputSectionRef = useRef(null);
   const logSelectionRef = useRef(false);
@@ -25,6 +29,7 @@ export default function Simulation() {
   const [selectedJobId, setSelectedJobId] = useState(null);
   const [historyError, setHistoryError] = useState(null);
   const [liveLog, setLiveLog] = useState("");
+  const [calibrationLog, setCalibrationLog] = useState("");
 
   const [lockedJobs, setLockedJobs] = useState(() => {
     try {
@@ -49,7 +54,7 @@ export default function Simulation() {
     async function loadJobs() {
       try {
         const response = await fetch(
-          "http://127.0.0.1:8010/api/jobs?limit=50"
+          `${API_BASE}/api/jobs?limit=50`
         );
 
         if (!response.ok) {
@@ -97,7 +102,7 @@ export default function Simulation() {
     async function loadLog() {
       try {
         const response = await fetch(
-          `http://127.0.0.1:8010/api/jobs/${selectedJobId}/log?offset=${logOffsetRef.current}`
+          `${API_BASE}/api/jobs/${selectedJobId}/log?offset=${logOffsetRef.current}`
         );
 
         if (!response.ok) {
@@ -157,7 +162,7 @@ export default function Simulation() {
       behavior: "smooth",
       block: "nearest",
     });
-  }, [liveLog]);
+  }, [liveLog, calibrationLog]);
 
   // Resume live updates when the user clears the text selection.
   useEffect(() => {
@@ -218,6 +223,19 @@ export default function Simulation() {
   const [temperature, setTemperature] = useState("310");
   const [cpuThreads, setCpuThreads] = useState(8);
 
+  const [calibrationAaJobId, setCalibrationAaJobId] = useState("");
+  const [calibrationDuration, setCalibrationDuration] = useState(10);
+  const [calibrationThreads, setCalibrationThreads] = useState(4);
+  const [calibrationParallel, setCalibrationParallel] = useState(2);
+  const [calibrationForces, setCalibrationForces] =
+    useState("100,200,300,400,500,600,700,800");
+  const [calibrationLowers, setCalibrationLowers] = useState("0.4,0.5");
+  const [calibrationUppers, setCalibrationUppers] = useState("0.7,0.8,0.9");
+
+  const [calibrationId, setCalibrationId] = useState(null);
+  const [calibrationStatus, setCalibrationStatus] = useState(null);
+  const [calibrationError, setCalibrationError] = useState(null);
+
   async function createAAJob() {
     if (!proteinFile) {
       alert("Please select an antibody PDB first.");
@@ -240,7 +258,7 @@ export default function Simulation() {
     form.append("nt", String(cpuThreads));
 
     const response = await fetch(
-      "http://127.0.0.1:8010/api/jobs",
+      `${API_BASE}/api/jobs`,
       {
         method: "POST",
         body: form,
@@ -298,7 +316,7 @@ export default function Simulation() {
     form.append("nt", String(cpuThreads));
 
     const response = await fetch(
-      "http://127.0.0.1:8010/api/jobs",
+      `${API_BASE}/api/jobs`,
       {
         method: "POST",
         body: form,
@@ -320,9 +338,150 @@ export default function Simulation() {
     return data;
   }
 
+  async function createCalibration() {
+    if (!calibrationAaJobId) {
+      alert("Please select a completed AA job first.");
+      return;
+    }
+
+    const form = new FormData();
+
+    form.append("aa_job_id", calibrationAaJobId);
+    form.append("duration_ns", String(calibrationDuration));
+    form.append("nt", String(calibrationThreads));
+    form.append("parallel", String(calibrationParallel));
+    form.append("forces", calibrationForces);
+    form.append("lowers", calibrationLowers);
+    form.append("uppers", calibrationUppers);
+
+    const response = await fetch(
+      `${API_BASE}/api/calibration`,
+      {
+        method: "POST",
+        body: form,
+      }
+    );
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text || "Could not start calibration");
+    }
+
+    const data = await response.json();
+
+    setCalibrationId(data.calibration_id);
+    setCalibrationLog("");
+    calibrationLogOffsetRef.current = 0;
+    setCalibrationStatus({
+      status: data.status || "running",
+      completed: 0,
+      total: 0,
+      progress_percent: 0,
+      successful: 0,
+      failed: 0,
+      top_results: [],
+    });
+    setCalibrationError(null);
+
+    return data;
+  }
+
+  useEffect(() => {
+    if (!calibrationId) {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadCalibrationStatus() {
+      try {
+        const response = await fetch(
+          `${API_BASE}/api/calibration/${calibrationId}/status`
+        );
+
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(
+            text || `Calibration status HTTP ${response.status}`
+          );
+        }
+
+        const data = await response.json();
+
+        if (!cancelled) {
+          setCalibrationStatus(data);
+          setCalibrationError(null);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setCalibrationError(error.message);
+        }
+      }
+    }
+
+    loadCalibrationStatus();
+
+    const timer = setInterval(loadCalibrationStatus, 2000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [calibrationId]);
+
+  // Stream only new output from the active EN calibration.
+  useEffect(() => {
+    if (!calibrationId) {
+      setCalibrationLog("");
+      calibrationLogOffsetRef.current = 0;
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadCalibrationLog() {
+      try {
+        const response = await fetch(
+          `${API_BASE}/api/calibration/${calibrationId}/log?offset=${calibrationLogOffsetRef.current}`
+        );
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        const chunk = await response.text();
+        const newOffset = Number(
+          response.headers.get("X-Log-Offset") ||
+            calibrationLogOffsetRef.current
+        );
+
+        if (!cancelled && chunk && !logSelectionRef.current) {
+          setCalibrationLog((previous) => {
+            const updated = previous + chunk;
+            return updated.slice(-100000);
+          });
+        }
+
+        if (!logSelectionRef.current) {
+          calibrationLogOffsetRef.current = newOffset;
+        }
+      } catch (error) {
+        console.error("Could not read calibration log:", error);
+      }
+    }
+
+    loadCalibrationLog();
+    const timer = setInterval(loadCalibrationLog, 1000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [calibrationId]);
+
   async function deleteJob(jobId) {
     const response = await fetch(
-      `http://127.0.0.1:8010/api/jobs/${jobId}`,
+      `${API_BASE}/api/jobs/${jobId}`,
       {
         method: "DELETE",
       }
@@ -358,7 +517,7 @@ export default function Simulation() {
     }
 
     const response = await fetch(
-      `http://127.0.0.1:8010/api/jobs/${jobId}/stop`,
+      `${API_BASE}/api/jobs/${jobId}/stop`,
       {
         method: "POST",
       }
@@ -519,6 +678,13 @@ export default function Simulation() {
               subtitle="Martini 3 · EN / Gō"
               onClick={() => setMode("martini")}
             />
+
+            <WorkflowCard
+              active={mode === "calibration"}
+              title="EN Calibration"
+              subtitle="Martini → AA dynamics"
+              onClick={() => setMode("calibration")}
+            />
           </Stack>
 
           <Divider sx={{ mb: 3, borderColor: "rgba(255,255,255,0.08)" }} />
@@ -541,30 +707,51 @@ export default function Simulation() {
                 jobs.find((job) => job.job_id === selectedJobId)?.status
               }
             />
+          ) : mode === "martini" ? (
+            <MartiniPanel
+              duration={martiniDuration}
+              setDuration={setMartiniDuration}
+              model={martiniModel}
+              setModel={setMartiniModel}
+              elasticForce={elasticForce}
+              setElasticForce={setElasticForce}
+              elasticLower={elasticLower}
+              setElasticLower={setElasticLower}
+              elasticUpper={elasticUpper}
+              setElasticUpper={setElasticUpper}
+              proteinFile={proteinFile}
+              setProteinFile={setProteinFile}
+              temperature={temperature}
+              setTemperature={setTemperature}
+              cpuThreads={cpuThreads}
+              setCpuThreads={setCpuThreads}
+              onRun={createMartiniJob}
+              onStop={() => stopJob(selectedJobId)}
+              selectedJobStatus={
+                jobs.find((job) => job.job_id === selectedJobId)?.status
+              }
+            />
           ) : (
-          <MartiniPanel
-            duration={martiniDuration}
-            setDuration={setMartiniDuration}
-            model={martiniModel}
-            setModel={setMartiniModel}
-            elasticForce={elasticForce}
-            setElasticForce={setElasticForce}
-            elasticLower={elasticLower}
-            setElasticLower={setElasticLower}
-            elasticUpper={elasticUpper}
-            setElasticUpper={setElasticUpper}
-            proteinFile={proteinFile}
-            setProteinFile={setProteinFile}
-            temperature={temperature}
-            setTemperature={setTemperature}
-            cpuThreads={cpuThreads}
-            setCpuThreads={setCpuThreads}
-            onRun={createMartiniJob}
-            onStop={() => stopJob(selectedJobId)}
-            selectedJobStatus={
-              jobs.find((job) => job.job_id === selectedJobId)?.status
-            }
-          />
+            <CalibrationPanel
+              jobs={jobs}
+              aaJobId={calibrationAaJobId}
+              setAaJobId={setCalibrationAaJobId}
+              duration={calibrationDuration}
+              setDuration={setCalibrationDuration}
+              threads={calibrationThreads}
+              setThreads={setCalibrationThreads}
+              parallel={calibrationParallel}
+              setParallel={setCalibrationParallel}
+              forces={calibrationForces}
+              setForces={setCalibrationForces}
+              lowers={calibrationLowers}
+              setLowers={setCalibrationLowers}
+              uppers={calibrationUppers}
+              setUppers={setCalibrationUppers}
+              onRun={createCalibration}
+              status={calibrationStatus}
+              error={calibrationError}
+            />
           )}
 
         </Box>
@@ -584,9 +771,11 @@ export default function Simulation() {
             fontFamily: "monospace",
           }}
         >
-          {selectedJobId
-            ? `AA-${selectedJobId.slice(0, 8)}`
-            : "No run selected"}
+          {mode === "calibration" && calibrationId
+            ? `CAL-${calibrationId.slice(0, 8)}`
+            : selectedJobId
+              ? `${jobs.find((job) => job.job_id === selectedJobId)?.method === "martini" ? "M3" : "AA"}-${selectedJobId.slice(0, 8)}`
+              : "No run selected"}
         </Typography>
       </Stack>
 
@@ -615,9 +804,11 @@ export default function Simulation() {
           boxSizing: "border-box",
         }}
       >
-        {selectedJobId
-          ? liveLog || "Waiting for simulation output..."
-          : "Select a simulation from the history to view its output."}
+        {mode === "calibration" && calibrationId
+          ? calibrationLog || "Waiting for calibration output..."
+          : selectedJobId
+            ? liveLog || "Waiting for simulation output..."
+            : "Select a simulation from the history to view its output."}
       </Box>
     </Paper>
   );
@@ -1062,6 +1253,332 @@ function AllAtomPanel({
           Stop
         </Button>
       </Stack>
+    </Stack>
+  );
+}
+
+
+
+function CalibrationPanel({
+  jobs,
+  aaJobId,
+  setAaJobId,
+  duration,
+  setDuration,
+  threads,
+  setThreads,
+  parallel,
+  setParallel,
+  forces,
+  setForces,
+  lowers,
+  setLowers,
+  uppers,
+  setUppers,
+  onRun,
+  status,
+  error,
+}) {
+  const completedAaJobs = jobs.filter(
+    (job) =>
+      job.method === "aa" &&
+      job.status === "done"
+  );
+
+  const running = status?.status === "running";
+  const completed = status?.completed ?? 0;
+  const total = status?.total ?? 0;
+  const progress = Number(status?.progress_percent ?? 0);
+
+  return (
+    <Stack spacing={3}>
+      <Box>
+        <Typography variant="subtitle1" sx={{ mb: 1.5 }}>
+          AA reference
+        </Typography>
+
+        <TextField
+          select
+          label="Completed AA job"
+          value={aaJobId}
+          onChange={(e) => setAaJobId(e.target.value)}
+          size="small"
+          sx={{ minWidth: 340 }}
+        >
+          {completedAaJobs.map((job) => (
+            <MenuItem
+              key={job.job_id}
+              value={job.job_id}
+            >
+              {`AA-${job.job_id.slice(0, 8)} · ${job.protein || "Antibody"} · ${job.duration_ns} ns`}
+            </MenuItem>
+          ))}
+        </TextField>
+      </Box>
+
+      <Divider sx={{ borderColor: "rgba(255,255,255,0.08)" }} />
+
+      <Box>
+        <Typography variant="subtitle1" sx={{ mb: 1.5 }}>
+          Elastic-network grid
+        </Typography>
+
+        <Stack spacing={2}>
+          <Stack
+            direction={{ xs: "column", md: "row" }}
+            spacing={2}
+            flexWrap="wrap"
+          >
+            <TextField
+              label="Force constants"
+              value={forces}
+              onChange={(e) => setForces(e.target.value)}
+              helperText="ef grid, comma-separated"
+              size="small"
+              sx={{ minWidth: 350 }}
+            />
+
+            <TextField
+              label="Lower cutoffs"
+              value={lowers}
+              onChange={(e) => setLowers(e.target.value)}
+              helperText="el (nm)"
+              size="small"
+              sx={{ width: 180 }}
+            />
+
+            <TextField
+              label="Upper cutoffs"
+              value={uppers}
+              onChange={(e) => setUppers(e.target.value)}
+              helperText="eu (nm)"
+              size="small"
+              sx={{ width: 190 }}
+            />
+          </Stack>
+
+          <Stack
+            direction={{ xs: "column", md: "row" }}
+            spacing={2}
+            flexWrap="wrap"
+          >
+            <TextField
+              label="Candidate production (ns)"
+              type="number"
+              value={duration}
+              onChange={(e) =>
+                setDuration(Math.max(0.01, Number(e.target.value) || 0.01))
+              }
+              size="small"
+              sx={{ width: 210 }}
+            />
+
+            <TextField
+              label="Threads / job"
+              type="number"
+              value={threads}
+              onChange={(e) =>
+                setThreads(Math.max(1, Math.floor(Number(e.target.value) || 1)))
+              }
+              inputProps={{ min: 1, step: 1 }}
+              size="small"
+              sx={{ width: 160 }}
+            />
+
+            <TextField
+              label="Parallel jobs"
+              type="number"
+              value={parallel}
+              onChange={(e) =>
+                setParallel(Math.max(1, Math.floor(Number(e.target.value) || 1)))
+              }
+              inputProps={{ min: 1, step: 1 }}
+              size="small"
+              sx={{ width: 160 }}
+            />
+          </Stack>
+        </Stack>
+      </Box>
+
+      <Box
+        sx={{
+          p: 2,
+          borderRadius: 2,
+          border: "1px solid rgba(255,255,255,0.10)",
+          background: "rgba(255,255,255,0.02)",
+        }}
+      >
+        <Typography variant="body2" sx={{ color: "text.secondary" }}>
+          Calibration/search against the selected AA reference. Parameters
+          selected here still require independent validation.
+        </Typography>
+      </Box>
+
+      <Button
+        variant="contained"
+        color="secondary"
+        onClick={onRun}
+        disabled={!aaJobId || running}
+        sx={{ alignSelf: "flex-start", minWidth: 190 }}
+      >
+        {running ? "Calibration running…" : "Run EN Calibration"}
+      </Button>
+
+      {error && (
+        <Typography variant="body2" sx={{ color: "error.main" }}>
+          {error}
+        </Typography>
+      )}
+
+      {status && (
+        <>
+          <Divider sx={{ borderColor: "rgba(255,255,255,0.08)" }} />
+
+          <Box>
+            <Stack
+              direction={{ xs: "column", sm: "row" }}
+              justifyContent="space-between"
+              spacing={1}
+              sx={{ mb: 1 }}
+            >
+              <Typography variant="subtitle1">
+                Calibration status
+              </Typography>
+
+              <Typography
+                variant="body2"
+                sx={{
+                  fontWeight: 700,
+                  textTransform: "uppercase",
+                  color:
+                    status.status === "done"
+                      ? "success.main"
+                      : status.status === "failed"
+                        ? "error.main"
+                        : "secondary.main",
+                }}
+              >
+                {status.status}
+              </Typography>
+            </Stack>
+
+            <Typography variant="body2" sx={{ mb: 1 }}>
+              {completed} / {total || "?"} candidates complete
+              {total ? ` · ${progress.toFixed(1)}%` : ""}
+            </Typography>
+
+            <Box
+              sx={{
+                width: "100%",
+                height: 10,
+                borderRadius: 999,
+                overflow: "hidden",
+                background: "rgba(255,255,255,0.08)",
+                mb: 1.5,
+              }}
+            >
+              <Box
+                sx={{
+                  width: `${Math.min(100, Math.max(0, progress))}%`,
+                  height: "100%",
+                  background: "currentColor",
+                  color:
+                    status.status === "done"
+                      ? "success.main"
+                      : status.status === "failed"
+                        ? "error.main"
+                        : "secondary.main",
+                  transition: "width 0.3s ease",
+                }}
+              />
+            </Box>
+
+            <Typography variant="caption" sx={{ color: "text.secondary" }}>
+              Successful: {status.successful ?? 0}
+              {" · "}
+              Failed: {status.failed ?? 0}
+            </Typography>
+          </Box>
+
+          {status.top_results?.length > 0 && (
+            <Box>
+              <Typography variant="subtitle1" sx={{ mb: 1 }}>
+                {status.status === "done" ? "Top candidates" : "Best so far"}
+              </Typography>
+
+              <Box
+                sx={{
+                  overflowX: "auto",
+                  border: "1px solid rgba(255,255,255,0.08)",
+                  borderRadius: 2,
+                }}
+              >
+                <Box
+                  component="table"
+                  sx={{
+                    width: "100%",
+                    borderCollapse: "collapse",
+                    fontSize: 13,
+                    "& th, & td": {
+                      px: 1.25,
+                      py: 1,
+                      textAlign: "right",
+                      borderBottom: "1px solid rgba(255,255,255,0.06)",
+                      whiteSpace: "nowrap",
+                    },
+                    "& th:first-of-type, & td:first-of-type": {
+                      textAlign: "left",
+                    },
+                  }}
+                >
+                  <thead>
+                    <tr>
+                      <th>Rank</th>
+                      <th>ef</th>
+                      <th>el</th>
+                      <th>eu</th>
+                      <th>RMSE (nm)</th>
+                      <th>Pearson</th>
+                      <th>Spearman</th>
+                      <th>Score</th>
+                    </tr>
+                  </thead>
+
+                  <tbody>
+                    {status.top_results.map((row) => (
+                      <tr
+                        key={`${row.elastic_force}-${row.elastic_lower}-${row.elastic_upper}`}
+                      >
+                        <td>{row.rank}</td>
+                        <td>{row.elastic_force}</td>
+                        <td>{row.elastic_lower}</td>
+                        <td>{row.elastic_upper}</td>
+                        <td>{row.rmse_nm.toFixed(4)}</td>
+                        <td>{row.pearson.toFixed(3)}</td>
+                        <td>{row.spearman.toFixed(3)}</td>
+                        <td>{row.score.toFixed(4)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </Box>
+              </Box>
+
+              {running && (
+                <Typography
+                  variant="caption"
+                  sx={{
+                    display: "block",
+                    mt: 1,
+                    color: "text.secondary",
+                  }}
+                >
+                  Rankings are provisional until the full grid completes.
+                </Typography>
+              )}
+            </Box>
+          )}
+        </>
+      )}
     </Stack>
   );
 }

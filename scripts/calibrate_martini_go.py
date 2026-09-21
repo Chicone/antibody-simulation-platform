@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Grid-search Martini 3 elastic-network parameters against an AA RMSF reference.
+Grid-search Martini Go parameters against an AA RMSF reference.
 
 Run from:
     /Users/luiscamara/PyCharm/abmd/antibody_dashboard
 
 Example:
-    python calibrate_martini_en.py \
+    python calibrate_martini_go.py \
       --protein-pdb /path/to/protein.pdb \
       --aa-rmsf /path/to/rmsf_ca_fixed.xvg \
       --duration-ns 4.63 \
@@ -14,7 +14,7 @@ Example:
       --parallel 2
 
 The script:
-  - creates one isolated Martini job per EN parameter combination
+  - creates one isolated Martini job per Go parameter combination
   - reuses backend.pipelines.martini_pipeline.run_martini_pipeline()
   - computes Martini BB RMSF over the requested production window
   - compares it residue-by-residue with the AA C-alpha RMSF
@@ -22,10 +22,10 @@ The script:
   - checkpoints results.csv after every completed candidate
 
 Default grid:
-    elastic_force = 200, 250, 300, 350
-    elastic_lower = 0.4, 0.5
-    elastic_upper = 0.7, 0.8, 0.9
-=> 24 Martini runs
+    go_epsilon = 9.414
+    go_lower = 0.3
+    go_upper = 1.1
+=> 1 baseline run
 """
 
 from __future__ import annotations
@@ -47,21 +47,21 @@ from pathlib import Path
 import numpy as np
 
 
-DEFAULT_FORCES = [100, 150, 200, 250, 300, 350, 400, 500]
-DEFAULT_LOWERS = [0.4, 0.5]
-DEFAULT_UPPERS = [0.7, 0.8, 0.9]
+DEFAULT_EPSILONS = [9.414]
+DEFAULT_LOWERS = [0.3]
+DEFAULT_UPPERS = [1.1]
 
 
 @dataclass(frozen=True)
 class GridPoint:
-    force: float
+    epsilon: float
     lower: float
     upper: float
     replica: int = 1
 
     @property
     def label(self) -> str:
-        return f"ef{self.force:g}_el{self.lower:g}_eu{self.upper:g}_rep{self.replica}"
+        return f"ge{self.epsilon:g}_gl{self.lower:g}_gu{self.upper:g}_rep{self.replica}"
 
 
 def parse_xvg(path: Path) -> tuple[np.ndarray, np.ndarray]:
@@ -143,6 +143,8 @@ def compute_metrics(
     martini: np.ndarray,
     mask: np.ndarray,
 ) -> dict[str, float]:
+    if not np.all(np.isfinite(aa)) or not np.all(np.isfinite(martini)):
+        raise RuntimeError("RMSF contains non-finite values")
     if len(aa) != len(martini):
         raise RuntimeError(
             f"Residue count mismatch: AA={len(aa)}, Martini={len(martini)}"
@@ -232,6 +234,8 @@ def run_gmx_rmsf(
 
     ndx = out_dir / "backbone_bb.ndx"
     n_bb = write_bb_index_from_gro(gro, ndx)
+    if n_bb != 434:
+        raise RuntimeError(f"Expected 434 physical BB beads, found {n_bb}")
 
     rmsf = out_dir / "rmsf_bb.xvg"
     end_ps = duration_ns * 1000.0
@@ -286,10 +290,10 @@ def prepare_job(
     params = {
         "duration_ns": duration_ns,
         "method": "martini",
-        "model": "elastic",
-        "elastic_force": point.force,
-        "elastic_lower": point.lower,
-        "elastic_upper": point.upper,
+        "model": "go",
+        "go_epsilon": point.epsilon,
+        "go_lower": point.lower,
+        "go_upper": point.upper,
         "salt_concentration": salt,
         "temperature": temperature,
         "nt": nt,
@@ -320,9 +324,9 @@ def run_candidate(
 
     result = {
         "label": point.label,
-        "elastic_force": point.force,
-        "elastic_lower": point.lower,
-        "elastic_upper": point.upper,
+        "go_epsilon": point.epsilon,
+        "go_lower": point.lower,
+        "go_upper": point.upper,
         "replica": point.replica,
         "reused": "false",
         "status": "failed",
@@ -360,6 +364,8 @@ def run_candidate(
             )
 
         _, martini_values = parse_xvg(rmsf_path)
+        if not np.all(np.isfinite(martini_values)):
+            raise RuntimeError("Martini BB RMSF contains non-finite values")
         metrics = compute_metrics(
             aa=aa_rmsf_values,
             martini=martini_values,
@@ -392,9 +398,9 @@ def write_results(csv_path: Path, rows: list[dict]) -> None:
         "rank",
         "status",
         "label",
-        "elastic_force",
-        "elastic_lower",
-        "elastic_upper",
+        "go_epsilon",
+        "go_lower",
+        "go_upper",
         "replica",
         "reused",
         "score",
@@ -449,7 +455,7 @@ def load_reused_results(path: Path | None) -> list[dict]:
         return []
 
     numeric_fields = (
-        "elastic_force", "elastic_lower", "elastic_upper",
+        "go_epsilon", "go_lower", "go_upper",
         "score", "rmse_nm", "mae_nm", "bias_nm",
         "pearson", "spearman", "aa_mean_rmsf_nm",
         "martini_mean_rmsf_nm", "wall_minutes",
@@ -489,19 +495,19 @@ def main() -> int:
     parser.add_argument("--replicas", type=int, default=1)
 
     parser.add_argument(
-        "--forces",
-        default="100,150,200,250,300,350,400,500",
-        help="Comma-separated EN force constants.",
+        "--epsilons",
+        default="9.414",
+        help="Comma-separated Go contact well depths.",
     )
     parser.add_argument(
         "--lowers",
-        default="0.4,0.5",
-        help="Comma-separated EN lower cutoffs (nm).",
+        default="0.3",
+        help="Comma-separated Go lower cutoffs (nm).",
     )
     parser.add_argument(
         "--uppers",
-        default="0.7,0.8,0.9",
-        help="Comma-separated EN upper cutoffs (nm).",
+        default="1.1",
+        help="Comma-separated Go upper cutoffs (nm).",
     )
 
     parser.add_argument("--salt", type=float, default=0.15)
@@ -539,6 +545,8 @@ def main() -> int:
         parser.error("--parallel must be >= 1")
     if args.replicas < 1:
         parser.error("--replicas must be >= 1")
+    if any(x <= 0 for x in parse_float_list(args.epsilons)):
+        parser.error("Go epsilon values must be > 0")
     if args.duration_ns <= 0:
         parser.error("--duration-ns must be > 0")
 
@@ -579,6 +587,8 @@ def main() -> int:
         return 2
 
     _, aa_values = parse_xvg(aa_rmsf)
+    if len(aa_values) != 434 or not np.all(np.isfinite(aa_values)):
+        parser.error("AA reference must contain 434 finite residue RMSF values")
 
     chain_lengths = parse_int_list(args.chain_lengths)
     mask = build_mask(
@@ -587,13 +597,13 @@ def main() -> int:
         exclude_termini=args.exclude_termini,
     )
 
-    forces = parse_float_list(args.forces)
+    epsilons = parse_float_list(args.epsilons)
     lowers = parse_float_list(args.lowers)
     uppers = parse_float_list(args.uppers)
 
     grid = [
         GridPoint(f, lo, hi, replica)
-        for f, lo, hi in itertools.product(forces, lowers, uppers)
+        for f, lo, hi in itertools.product(epsilons, lowers, uppers)
         if lo < hi
         for replica in range(1, args.replicas + 1)
     ]
@@ -610,7 +620,7 @@ def main() -> int:
         "parallel_jobs": args.parallel,
         "replicas": args.replicas,
         "nominal_total_threads": args.nt * args.parallel,
-        "forces": forces,
+        "epsilons": epsilons,
         "lowers": lowers,
         "uppers": uppers,
         "salt_concentration": args.salt,
@@ -638,7 +648,7 @@ def main() -> int:
     )
 
     print()
-    print("Martini EN calibration")
+    print("Martini Go calibration")
     print("======================")
     print(f"Candidates       : {len(grid)}")
     print(f"Reused results   : {len(reused_results)}")

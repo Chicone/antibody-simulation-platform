@@ -95,6 +95,9 @@ async def create_simulation_job(
     elastic_force: float | None = Form(None),
     elastic_lower: float | None = Form(None),
     elastic_upper: float | None = Form(None),
+    go_epsilon: float | None = Form(None),
+    go_lower: float | None = Form(None),
+    go_upper: float | None = Form(None),
     salt_concentration: float = Form(0.15),
     temperature: float = Form(310.0),
     nt: int = Form(8),
@@ -111,6 +114,17 @@ async def create_simulation_job(
             detail="duration_ns must be > 0",
         )
 
+    if method == "martini":
+        selected_model = model or "elastic"
+        if selected_model not in {"elastic", "go"}:
+            raise HTTPException(status_code=400, detail="Unsupported Martini model")
+        if selected_model == "go":
+            epsilon = 9.414 if go_epsilon is None else go_epsilon
+            lower = 0.3 if go_lower is None else go_lower
+            upper = 1.1 if go_upper is None else go_upper
+            if not (epsilon > 0 and 0 < lower < upper):
+                raise HTTPException(status_code=400, detail="Invalid GōMartini parameters")
+
     return create_job(
         protein_file=protein_pdb,
         method=method,
@@ -120,6 +134,9 @@ async def create_simulation_job(
         elastic_force=elastic_force,
         elastic_lower=elastic_lower,
         elastic_upper=elastic_upper,
+        go_epsilon=go_epsilon,
+        go_lower=go_lower,
+        go_upper=go_upper,
         salt_concentration=salt_concentration,
         temperature=temperature,
         nt=nt,

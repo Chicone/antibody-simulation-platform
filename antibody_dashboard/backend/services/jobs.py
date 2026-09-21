@@ -24,6 +24,9 @@ def create_job(
     elastic_force: float | None = None,
     elastic_lower: float | None = None,
     elastic_upper: float | None = None,
+    go_epsilon: float | None = None,
+    go_lower: float | None = None,
+    go_upper: float | None = None,
     salt_concentration: float = 0.15,
     temperature: float = 310.0,
     nt=8,
@@ -59,6 +62,9 @@ def create_job(
         "elastic_force": elastic_force,
         "elastic_lower": elastic_lower,
         "elastic_upper": elastic_upper,
+        "go_epsilon": go_epsilon,
+        "go_lower": go_lower,
+        "go_upper": go_upper,
     }
 
     write_json(directory / "run.json", run)
@@ -70,6 +76,9 @@ def create_job(
         "elastic_force": elastic_force,
         "elastic_lower": elastic_lower,
         "elastic_upper": elastic_upper,
+        "go_epsilon": go_epsilon,
+        "go_lower": go_lower,
+        "go_upper": go_upper,
         "salt_concentration": salt_concentration,
         "temperature": temperature,
         "nt": nt,

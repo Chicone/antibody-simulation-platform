@@ -30,6 +30,7 @@ def patch_system_topology(
     system_top: Path,
     system_gro: Path,
     martini_ff: Path,
+    model: str = "elastic",
 ) -> None:
     """Patch INSANE output for Martini 3 and martinize2."""
 
@@ -55,56 +56,58 @@ def patch_system_topology(
 
         patched.append(line)
 
-    protein_itps = sorted(system_top.parent.glob("Protein_*.itp"))
+    # GōMartini emits a single Protein.itp containing both chains, whereas
+    # the existing EN workflow emits Protein_*.itp per chain.
+    if model == "go":
+        required = ("Protein.itp", "go_atomtypes.itp", "go_nbparams.itp")
+        missing = [name for name in required if not (system_top.parent / name).is_file()]
+        if missing:
+            raise RuntimeError(f"Incomplete GōMartini topology: {missing}")
+        include_block = [
+            "#define GO_VIRT",
+            f'#include "{martini_ff / "martini_v3.0.0.itp"}"',
+            '#include "go_atomtypes.itp"',
+            '#include "go_nbparams.itp"',
+            f'#include "{martini_ff / "martini_v3.0.0_solvents_v1.itp"}"',
+            f'#include "{martini_ff / "martini_v3.0.0_ions_v1.itp"}"',
+            '#include "Protein.itp"',
+            "",
+        ]
+        # INSANE's `Protein 1` is already correct for this topology.
+        patched = include_block + patched
+    elif model == "elastic":
+        protein_itps = sorted(system_top.parent.glob("Protein_*.itp"))
+        if not protein_itps:
+            raise RuntimeError("No Protein_*.itp files produced by martinize2.")
+        include_block = [
+            f'#include "{martini_ff / "martini_v3.0.0.itp"}"',
+            f'#include "{martini_ff / "martini_v3.0.0_solvents_v1.itp"}"',
+            f'#include "{martini_ff / "martini_v3.0.0_ions_v1.itp"}"',
+        ]
+        for protein_itp in protein_itps:
+            include_block.append(f'#include "{protein_itp.name}"')
+        include_block.append("")
+        patched = include_block + patched
 
-    if not protein_itps:
-        raise RuntimeError(
-            "No Protein_*.itp files produced by martinize2."
-        )
-
-    # Explicit Martini 3 includes plus martinize2 protein topology.
-    include_block = [
-        f'#include "{martini_ff / "martini_v3.0.0.itp"}"',
-        f'#include "{martini_ff / "martini_v3.0.0_solvents_v1.itp"}"',
-        f'#include "{martini_ff / "martini_v3.0.0_ions_v1.itp"}"',
-    ]
-
-    for protein_itp in protein_itps:
-        include_block.append(
-            f'#include "{protein_itp.name}"'
-        )
-
-    include_block.append("")
-
-    patched = include_block + patched
-
-    # INSANE writes one generic "Protein" entry, but martinize2
-    # generates one moleculetype per chain: Protein_0, Protein_1, ...
-    in_molecules = False
-    new_patched = []
-
-    for line in patched:
-        stripped = line.strip()
-
-        if stripped.lower() == "[ molecules ]":
-            in_molecules = True
+        # INSANE's generic Protein entry must match the per-chain EN types.
+        in_molecules = False
+        new_patched = []
+        for line in patched:
+            stripped = line.strip()
+            if stripped.lower() == "[ molecules ]":
+                in_molecules = True
+                new_patched.append(line)
+                continue
+            if in_molecules and stripped.startswith("["):
+                in_molecules = False
+            if in_molecules and stripped.startswith("Protein "):
+                for protein_itp in protein_itps:
+                    new_patched.append(f"{protein_itp.stem:<16} 1")
+                continue
             new_patched.append(line)
-            continue
-
-        if in_molecules and stripped.startswith("["):
-            in_molecules = False
-
-        if in_molecules and stripped.startswith("Protein "):
-            for protein_itp in protein_itps:
-                molecule_name = protein_itp.stem
-                new_patched.append(
-                    f"{molecule_name:<16} 1"
-                )
-            continue
-
-        new_patched.append(line)
-
-    patched = new_patched
+        patched = new_patched
+    else:
+        raise ValueError(f"Unsupported Martini model: {model}")
 
     system_top.write_text(
         "\n".join(patched) + "\n",
@@ -250,9 +253,16 @@ def run_martini_pipeline(job_dir: Path) -> None:
 
     duration_ns = float(params["duration_ns"])
     model = params.get("model", "elastic")
-    elastic_force = float(params.get("elastic_force", 250))
-    elastic_lower = float(params.get("elastic_lower", 0.5))
-    elastic_upper = float(params.get("elastic_upper", 0.7))
+    if model not in {"elastic", "go"}:
+        raise ValueError(f"Unsupported Martini model: {model!r}")
+    go_epsilon = float(params.get("go_epsilon", 9.414))
+    go_lower = float(params.get("go_lower", 0.3))
+    go_upper = float(params.get("go_upper", 1.1))
+    if model == "go" and not (go_epsilon > 0 and 0 < go_lower < go_upper):
+        raise ValueError("Gō parameters require epsilon > 0 and 0 < lower < upper")
+    elastic_force = float(params.get("elastic_force") or 250)
+    elastic_lower = float(params.get("elastic_lower") or 0.5)
+    elastic_upper = float(params.get("elastic_upper") or 0.7)
     salt_concentration = float(
         params.get("salt_concentration", 0.15)
     )
@@ -290,6 +300,10 @@ def run_martini_pipeline(job_dir: Path) -> None:
             log.write(f"EN lower cutoff : {elastic_lower} nm\n")
             log.write(f"EN upper cutoff : {elastic_upper} nm\n")
 
+        if model == "go":
+            log.write(f"Go epsilon      : {go_epsilon} kJ/mol\n")
+            log.write(f"Go lower cutoff : {go_lower} nm\n")
+            log.write(f"Go upper cutoff : {go_upper} nm\n")
         log.write("Martini workspace prepared successfully.\n")
 
     # ---------------------------------------------------------
@@ -333,6 +347,14 @@ def run_martini_pipeline(job_dir: Path) -> None:
                 "-eu", str(elastic_upper),
             ]
         )
+
+    elif model == "go":
+        command.extend([
+            "-go", "-go-write-file",
+            "-go-eps", str(go_epsilon),
+            "-go-low", str(go_lower),
+            "-go-up", str(go_upper),
+        ])
 
     command.extend(
         [
@@ -384,6 +406,7 @@ def run_martini_pipeline(job_dir: Path) -> None:
         system_top,
         system_gro,
         MARTINI_FF,
+        model=model,
     )
 
     with open(log_file, "a", encoding="utf-8") as log:
@@ -611,8 +634,3 @@ def run_martini_pipeline(job_dir: Path) -> None:
             f"Martini production MD completed successfully: "
             f"{duration_ns} ns.\n"
         )
-
-    return
-
-    return
-
